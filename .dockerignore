@@ -1,0 +1,6 @@
+.git
+**/*.exe
+**/*.db
+**/*.db-*
+**/console_stdout.log
+**/console_stderr.log

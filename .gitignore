@@ -5,3 +5,9 @@
 /dist/
 # OS
 .DS_Store
+examples/web/console_stderr.log
+examples/web/console_stdout.log
+examples/web/web_console.exe
+.gitignore
+examples/web/web_console.exe~
+.claude/scheduled_tasks.lock

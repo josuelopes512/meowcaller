@@ -1,0 +1,15 @@
+services:
+  web-console:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - LISTEN_ADDR=0.0.0.0:8080
+    volumes:
+      - wa_session:/data
+    ports:
+      - "8080:8080"
+
+volumes:
+  wa_session:

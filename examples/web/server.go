@@ -75,9 +75,12 @@ type vbParticipantVideo struct {
 
 const browserMutationHeader = "X-Meowcaller-Request"
 
-// newVideoBridge starts a bridge on a free 127.0.0.1 port.
-func newVideoBridge(log zerolog.Logger) (*videoBridge, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+// newVideoBridge starts a bridge on addr. An empty addr defaults to a free 127.0.0.1 port.
+func newVideoBridge(log zerolog.Logger, addr string) (*videoBridge, error) {
+	if addr == "" {
+		addr = "127.0.0.1:0"
+	}
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("video bridge listen: %w", err)
 	}

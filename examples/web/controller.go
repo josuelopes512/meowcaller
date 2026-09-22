@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -1221,7 +1222,7 @@ func (c *webCallController) reject() error {
 }
 
 func runWebConsole(ctx context.Context, rec *diag.Recorder) error {
-	bridge, err := newVideoBridge(*zerolog.Ctx(ctx))
+	bridge, err := newVideoBridge(*zerolog.Ctx(ctx), os.Getenv("LISTEN_ADDR"))
 	if err != nil {
 		return err
 	}
