@@ -165,6 +165,11 @@ type webCallController struct {
 
 func newWebCallController(ctx context.Context, client *meowcaller.Client, bridge *videoBridge, log zerolog.Logger) *webCallController {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
+	// Audio is bridged through the browser (mic upload / SSE playback), the same way
+	// video is: the console must work when the process runs on a machine with no audio
+	// hardware of its own (e.g. a hosted container), so it never opens a local device.
+	var audioSourceMu sync.Mutex
+	var audioSource *browserAudioSource
 	c := &webCallController{
 		ctx: ctx, client: client, bridge: bridge, log: log,
 		inviteParticipants: func(ctx context.Context, call *meowcaller.Call, targets ...string) []error {
@@ -183,10 +188,13 @@ func newWebCallController(ctx context.Context, client *meowcaller.Client, bridge
 			call.OnGroupState(listener)
 		},
 		attachMedia: func(call *meowcaller.Call) error {
-			if err := wireMic(call); err != nil {
-				return err
-			}
-			return wireSpeaker(call)
+			src := newBrowserAudioSource()
+			audioSourceMu.Lock()
+			audioSource = src
+			audioSourceMu.Unlock()
+			call.Play(src)
+			call.Receive(newBrowserAudioSink(bridge))
+			return nil
 		},
 		hangupCall: func(call *meowcaller.Call) error {
 			return call.Hangup()
@@ -204,6 +212,14 @@ func newWebCallController(ctx context.Context, client *meowcaller.Client, bridge
 	c.joinCallLink = client.JoinCallLink
 	bridge.OnControl(c.control)
 	bridge.OnFrame(c.sendVideoFrame)
+	bridge.OnAudioFrame(func(pcm []byte) {
+		audioSourceMu.Lock()
+		src := audioSource
+		audioSourceMu.Unlock()
+		if src != nil {
+			src.push(pcm)
+		}
+	})
 	client.OnIncomingCall(c.onIncomingCall)
 	return c
 }
@@ -318,15 +334,11 @@ func (c *webCallController) attach(call *meowcaller.Call) error {
 	attachMedia := func() error {
 		var attachErr error
 		mediaOnce.Do(func() {
-			if c.attachMedia != nil {
-				attachErr = c.attachMedia(call)
+			if c.attachMedia == nil {
+				attachErr = errors.New("web call controller: attachMedia not configured")
 				return
 			}
-			if err := wireMic(call); err != nil {
-				attachErr = err
-				return
-			}
-			attachErr = wireSpeaker(call)
+			attachErr = c.attachMedia(call)
 		})
 		return attachErr
 	}

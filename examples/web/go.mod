@@ -5,7 +5,6 @@ go 1.25.0
 require (
 	github.com/polymorfa/hypermeow v0.0.0-20260906031440-90f9e4ec2c88
 	github.com/purpshell/meowcaller v0.0.0
-	github.com/purpshell/meowcaller/audio/malgo v0.0.0
 	github.com/rs/zerolog v1.35.1
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	google.golang.org/protobuf v1.36.11
@@ -16,7 +15,6 @@ require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/coder/websocket v1.8.15 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/gen2brain/malgo v0.11.23 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect

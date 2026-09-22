@@ -12,7 +12,6 @@ import (
 	"time"
 
 	meowcaller "github.com/purpshell/meowcaller"
-	"github.com/purpshell/meowcaller/audio/malgo"
 	"github.com/purpshell/meowcaller/diag"
 	"github.com/rs/zerolog"
 	"github.com/polymorfa/hypermeow"
@@ -132,20 +131,3 @@ func waitUntilReady(ctx context.Context, client *whatsmeow.Client, timeout time.
 	return nil
 }
 
-func wireMic(call *meowcaller.Call) error {
-	mic, err := malgo.Mic()
-	if err != nil {
-		return fmt.Errorf("open mic: %w", err)
-	}
-	call.Play(mic)
-	return nil
-}
-
-func wireSpeaker(call *meowcaller.Call) error {
-	speaker, err := malgo.Speaker()
-	if err != nil {
-		return fmt.Errorf("open speaker: %w", err)
-	}
-	call.Receive(speaker)
-	return nil
-}

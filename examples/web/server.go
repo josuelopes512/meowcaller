@@ -29,10 +29,11 @@ type videoBridge struct {
 	srv *http.Server
 	log zerolog.Logger
 
-	mu          sync.Mutex
-	subs        map[chan vbMsg]struct{}
-	onFrame     func([]byte)
-	onControl   func(vbControl) error
+	mu           sync.Mutex
+	subs         map[chan vbMsg]struct{}
+	onFrame      func([]byte)
+	onAudioFrame func([]byte)
+	onControl    func(vbControl) error
 	orientation int
 	qrPNG       []byte
 	state       []byte
@@ -89,6 +90,7 @@ func newVideoBridge(log zerolog.Logger, addr string) (*videoBridge, error) {
 	mux.HandleFunc("/", vb.handleIndex)
 	mux.HandleFunc("/in", vb.handleIn)
 	mux.HandleFunc("/out", vb.handleOut)
+	mux.HandleFunc("/audio-out", vb.handleAudioOut)
 	mux.HandleFunc("/control", vb.handleControl)
 	mux.HandleFunc("/qr.png", vb.handleQRCode)
 	vb.srv = &http.Server{Handler: mux}
@@ -168,6 +170,23 @@ func (vb *videoBridge) OnFrame(fn func([]byte)) {
 	vb.mu.Lock()
 	vb.onFrame = fn
 	vb.mu.Unlock()
+}
+
+// OnAudioFrame registers a callback fired per s16le PCM chunk the page's microphone
+// capture uploads.
+func (vb *videoBridge) OnAudioFrame(fn func([]byte)) {
+	vb.mu.Lock()
+	vb.onAudioFrame = fn
+	vb.mu.Unlock()
+}
+
+// WriteAudioFrame pushes one 16 kHz mono s16le PCM frame to every connected page as a
+// base64 "audio" SSE event, for Web Audio playback.
+func (vb *videoBridge) WriteAudioFrame(pcm []byte) {
+	if len(pcm) == 0 {
+		return
+	}
+	vb.broadcast(vbMsg{event: "audio", data: []byte(base64.StdEncoding.EncodeToString(pcm))})
 }
 
 func (vb *videoBridge) OnControl(fn func(vbControl) error) {
@@ -327,6 +346,28 @@ func (vb *videoBridge) handleOut(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (vb *videoBridge) handleAudioOut(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if !allowBrowserMutation(w, r, "application/octet-stream") {
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 256<<10))
+	if err != nil {
+		http.Error(w, "read", http.StatusBadRequest)
+		return
+	}
+	vb.mu.Lock()
+	fn := vb.onAudioFrame
+	vb.mu.Unlock()
+	if fn != nil && len(body) > 0 {
+		fn(body)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (vb *videoBridge) handleControl(w http.ResponseWriter, r *http.Request) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L40-L120
 	if r.Method != http.MethodPost {
@@ -466,16 +507,16 @@ const invoke=(action,extra)=>control(action,extra).catch(e=>log(action,e.message
 let generatedCallLinkVideo=false;
 async function createCallLink(action){$('createCallLinkAudio').disabled=true;$('createCallLinkVideo').disabled=true;$('generatedCallLink').value='';$('copyGeneratedCallLink').disabled=true;$('joinGeneratedCallLink').disabled=true;try{await control(action)}catch(e){log(action,e.message)}finally{$('createCallLinkAudio').disabled=false;$('createCallLinkVideo').disabled=false}}
 function updatePeopleControls(s){if(s.event==='idle'||s.event==='ended'){$('startGroupAudio').disabled=false;$('startGroupVideo').disabled=false;$('startGroupIDAudio').disabled=false;$('startGroupIDVideo').disabled=false;$('addParticipants').disabled=true}else if(s.event==='ready'||(s.event==='phase'&&s.phase===4)){$('startGroupAudio').disabled=true;$('startGroupVideo').disabled=true;$('startGroupIDAudio').disabled=true;$('startGroupIDVideo').disabled=true;$('addParticipants').disabled=false}else if(['incoming','dialing','group_dialing','answering'].includes(s.event)||s.event==='phase'||s.event==='pairing'){$('startGroupAudio').disabled=true;$('startGroupVideo').disabled=true;$('startGroupIDAudio').disabled=true;$('startGroupIDVideo').disabled=true;$('addParticipants').disabled=true}}
-$('dialAudio').onclick=()=>invoke('dial_audio',{target:$('target').value.trim()});
+$('dialAudio').onclick=()=>{startMic();invoke('dial_audio',{target:$('target').value.trim()})};
 $('createCallLinkAudio').onclick=()=>createCallLink('create_call_link_audio');$('createCallLinkVideo').onclick=()=>createCallLink('create_call_link_video');
 $('copyGeneratedCallLink').onclick=()=>navigator.clipboard.writeText($('generatedCallLink').value).then(()=>log('call link copied')).catch(e=>log('copy call link',e.message));
-$('joinGeneratedCallLink').onclick=()=>{const extra={token:$('generatedCallLink').value};if(generatedCallLinkVideo)invokeVideoCall('join_call_link_video',extra);else invoke('join_call_link_audio',extra)};
+$('joinGeneratedCallLink').onclick=()=>{const extra={token:$('generatedCallLink').value};if(generatedCallLinkVideo)invokeVideoCall('join_call_link_video',extra);else{startMic();invoke('join_call_link_audio',extra)}};
 $('previewCallLinkAudio').onclick=()=>invoke('preview_call_link_audio',{token:$('callLink').value.trim()});$('previewCallLinkVideo').onclick=()=>invoke('preview_call_link_video',{token:$('callLink').value.trim()});
-$('joinCallLinkAudio').onclick=()=>invoke('join_call_link_audio',{token:$('callLink').value.trim()});$('joinCallLinkVideo').onclick=()=>invokeVideoCall('join_call_link_video',{token:$('callLink').value.trim()});
+$('joinCallLinkAudio').onclick=()=>{startMic();invoke('join_call_link_audio',{token:$('callLink').value.trim()})};$('joinCallLinkVideo').onclick=()=>invokeVideoCall('join_call_link_video',{token:$('callLink').value.trim()});
 $('approvalRequired').onchange=()=>invoke('set_approval_required',{enabled:$('approvalRequired').checked});
-$('startGroupIDAudio').onclick=()=>invoke('start_group_id_audio',{group_id:$('groupID').value.trim()});
-$('startGroupAudio').onclick=()=>invoke('start_group_audio',{targets:participantTargets()});$('addParticipants').onclick=()=>invoke('add_participants',{targets:participantTargets()});const participantTargets=()=>$('participants').value.split(/[,\n]/).map(target=>target.trim()).filter(Boolean);
-$('answer').onclick=()=>invoke('answer');$('reject').onclick=()=>invoke('reject');$('acceptVideo').onclick=()=>invoke('accept_video');$('hangup').onclick=()=>invoke('hangup');
+$('startGroupIDAudio').onclick=()=>{startMic();invoke('start_group_id_audio',{group_id:$('groupID').value.trim()})};
+$('startGroupAudio').onclick=()=>{startMic();invoke('start_group_audio',{targets:participantTargets()})};$('addParticipants').onclick=()=>invoke('add_participants',{targets:participantTargets()});const participantTargets=()=>$('participants').value.split(/[,\n]/).map(target=>target.trim()).filter(Boolean);
+$('answer').onclick=()=>{startMic();invoke('answer')};$('reject').onclick=()=>invoke('reject');$('acceptVideo').onclick=()=>invoke('accept_video');$('hangup').onclick=()=>invoke('hangup');
 document.querySelectorAll('[data-reaction]').forEach(b=>b.onclick=()=>invoke('reaction',{emoji:b.dataset.reaction}));
 $('sendCustomReaction').onclick=()=>invoke('reaction',{emoji:$('customReaction').value});
 $('raiseHand').onclick=()=>invoke('raise_hand');$('lowerHand').onclick=()=>invoke('lower_hand');
@@ -519,11 +560,19 @@ let sharingScreen=false,cameraWasActive=false;
 async function stopScreenShare(){if(!sharingScreen)return;try{await control('stop_screen_share')}catch(e){log('stop_screen_share',e.message);return}sharingScreen=false;await stopCamera();if(cameraWasActive)await startCamera();cameraWasActive=false;$('shareScreen').textContent='Share screen'}
 async function startScreenShare(){if(sharingScreen){await stopScreenShare();return}cameraWasActive=!!stream;let display=null,screenShareStarted=false;try{display=await navigator.mediaDevices.getDisplayMedia({video:true,audio:false});if(stream)await stopCamera();await control('start_screen_share',{screen_share_id:1,has_screen_share_id:true});screenShareStarted=true;sharingScreen=true;forceKeyframe=true;await startCapture(display,'Sharing screen');display.getVideoTracks()[0].onended=()=>void stopScreenShare();$('shareScreen').textContent='Stop sharing'}catch(e){log('start_screen_share',e.message);if(screenShareStarted)await control('stop_screen_share').catch(stopError=>log('stop_screen_share',stopError.message));sharingScreen=false;if(display)display.getTracks().forEach(t=>t.stop());await stopCamera();if(cameraWasActive)await startCamera();cameraWasActive=false}}
 $('shareScreen').onclick=()=>void startScreenShare();
-async function invokeVideoCall(action,extra){const startedHere=!stream;if(!await startCamera())return;try{await control(action,extra)}catch(e){log(action,e.message);if(startedHere)await stopCamera()}}
+async function invokeVideoCall(action,extra){startMic();const startedHere=!stream;if(!await startCamera())return;try{await control(action,extra)}catch(e){log(action,e.message);if(startedHere)await stopCamera()}}
 $('dialVideo').onclick=()=>invokeVideoCall('dial_video',{target:$('target').value.trim()});
 $('startGroupVideo').onclick=()=>invokeVideoCall('start_group_video',{targets:participantTargets()});
 $('startGroupIDVideo').onclick=()=>invokeVideoCall('start_group_id_video',{group_id:$('groupID').value.trim()});
 $('startVideo').onclick=()=>invokeVideoCall('start_video');
 $('stopVideo').onclick=async()=>{try{await control('stop_video');await stopCamera()}catch(e){log('stop_video',e.message)}};
 $('cam').onclick=async()=>{if(stream){await stopCamera();invoke('disable_video');return}if(await startCamera())invoke('enable_video')};
+let audioCtx=null,audioNextTime=0;
+function ensureAudioCtx(){if(!audioCtx){audioCtx=new(window.AudioContext||window.webkitAudioContext)({sampleRate:16000});audioNextTime=audioCtx.currentTime}return audioCtx}
+let micStream=null,micReader=null,micUploadBuf=new Uint8Array(0),resamplePos=0,resampleLast=0,resampleHavePrev=false;
+function resampleTo16k(mono,inRate){if(inRate===16000)return mono;const step=inRate/16000;let src,base=0;if(resampleHavePrev){src=new Float32Array(mono.length+1);src[0]=resampleLast;src.set(mono,1);base=1}else{src=mono}const out=[];let pos=resamplePos;for(;;){const idx=pos+base,i=Math.floor(idx);if(i+1>=src.length)break;const frac=idx-i;out.push(src[i]*(1-frac)+src[i+1]*frac);pos+=step}resamplePos=pos-mono.length;resampleLast=mono[mono.length-1];resampleHavePrev=true;return Float32Array.from(out)}
+function queueMicPCM(bytes){const merged=new Uint8Array(micUploadBuf.length+bytes.length);merged.set(micUploadBuf);merged.set(bytes,micUploadBuf.length);const frameBytes=1920,whole=merged.length-(merged.length%frameBytes);if(whole===0){micUploadBuf=merged;return}micUploadBuf=merged.slice(whole);fetch('/audio-out',{method:'POST',headers:{...mutationHeaders,'content-type':'application/octet-stream'},body:merged.slice(0,whole)}).catch(e=>log('mic upload',e.message))}
+async function pumpMic(activeReader){try{for(;;){const{value:audioData,done}=await activeReader.read();if(done)break;const f32=new Float32Array(audioData.numberOfFrames);audioData.copyTo(f32,{planeIndex:0,format:'f32-planar'});const rate=audioData.sampleRate;audioData.close();const mono=resampleTo16k(f32,rate);if(mono.length){const bytes=new Uint8Array(mono.length*2),view=new DataView(bytes.buffer);for(let i=0;i<mono.length;i++){let s=mono[i];if(s>1)s=1;else if(s<-1)s=-1;view.setInt16(i*2,s<0?s*32768:s*32767,true)}queueMicPCM(bytes)}}}catch(e){if(micReader===activeReader)log('mic',e.message)}}
+async function startMic(){ensureAudioCtx();if(audioCtx.state==='suspended')audioCtx.resume().catch(()=>{});if(micStream)return true;try{micStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,sampleRate:16000,echoCancellation:true,noiseSuppression:true}})}catch(e){log('mic',e.message);micStream=null;return false}const track=micStream.getAudioTracks()[0];micReader=new MediaStreamTrackProcessor({track}).readable.getReader();void pumpMic(micReader);return true}
+es.addEventListener('audio',e=>{const bytes=Uint8Array.from(atob(e.data),c=>c.charCodeAt(0)),n=bytes.length>>1;if(n===0)return;const ctx=ensureAudioCtx(),buf=ctx.createBuffer(1,n,16000),ch=buf.getChannelData(0),view=new DataView(bytes.buffer);for(let i=0;i<n;i++)ch[i]=view.getInt16(i*2,true)/32768;const src=ctx.createBufferSource();src.buffer=buf;src.connect(ctx.destination);const startAt=Math.max(ctx.currentTime,audioNextTime);src.start(startAt);audioNextTime=startAt+buf.duration});
 </script></body></html>`
